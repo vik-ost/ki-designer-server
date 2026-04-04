@@ -277,20 +277,40 @@ async def refine_and_send_stl(preview_task_id, order):
             status_data = status_resp.json()
             if status_data.get("status") == "SUCCEEDED":
                 model_urls = status_data.get("model_urls", {})
+                stl_url = model_urls.get("stl", "")
                 glb_url = model_urls.get("glb", "")
-                stl_url = model_urls.get("obj", "")
-                fbx_url = model_urls.get("fbx", "")
+                obj_url = model_urls.get("obj", "")
 
-                msg = f"<b>STL/3D-Modell fertig!</b>\nBestellung #{order['id']}: {order['description']}\n\n"
+                msg = f"<b>3D-Modell fertig!</b>\nBestellung #{order['id']}: {order['description']}\n\n"
+                if stl_url:
+                    msg += f"<b>STL:</b> {stl_url}\n"
                 if glb_url:
                     msg += f"GLB: {glb_url}\n"
-                if stl_url:
-                    msg += f"OBJ: {stl_url}\n"
-                if fbx_url:
-                    msg += f"FBX: {fbx_url}\n"
-                msg += f"\nDu kannst GLB/OBJ in deinem Slicer oeffnen oder mit Meshy zu STL konvertieren."
+                if obj_url:
+                    msg += f"OBJ: {obj_url}\n"
 
                 await send_ki_telegram(msg)
+
+                # STL als Datei per Telegram schicken
+                if stl_url:
+                    try:
+                        async with httpx.AsyncClient(timeout=30) as dl_http:
+                            stl_resp = await dl_http.get(stl_url)
+                            if stl_resp.status_code == 200:
+                                import tempfile
+                                stl_path = os.path.join(tempfile.gettempdir(), f"bestellung_{order['id']}.stl")
+                                with open(stl_path, "wb") as sf:
+                                    sf.write(stl_resp.content)
+                                # Datei per Telegram senden
+                                tg_url = f"https://api.telegram.org/bot{KI_TELEGRAM_TOKEN}/sendDocument"
+                                with open(stl_path, "rb") as sf:
+                                    async with httpx.AsyncClient(timeout=30) as tg_http:
+                                        await tg_http.post(tg_url,
+                                            files={"document": (f"bestellung_{order['id']}.stl", sf)},
+                                            data={"chat_id": TELEGRAM_CHAT_ID, "caption": f"STL Datei - {order['description']}"})
+                                print(f"STL Datei gesendet fuer Bestellung #{order['id']}")
+                    except Exception as e:
+                        print(f"STL Download/Send Fehler: {e}")
                 print(f"Refine fertig fuer Bestellung #{order['id']}")
                 return
 
