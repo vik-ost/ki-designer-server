@@ -5,11 +5,15 @@ import re
 from aiohttp import web
 import httpx
 from datetime import datetime, timezone, timedelta
+from dotenv import load_dotenv
+
+load_dotenv(os.path.join(os.path.dirname(__file__), "..", ".env"))
 
 # Alle API Keys aus Environment Variables (sicher!)
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
+ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
 MESHY_API_KEY = os.getenv("MESHY_API_KEY", "")
-KI_TELEGRAM_TOKEN = os.getenv("KI_TELEGRAM_TOKEN", "")
+KI_TELEGRAM_TOKEN = os.getenv("KI_TELEGRAM_TOKEN", "8687941693:AAF204T_j8o_g6CA797uYBU9W2T8nXAo7ck")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "1668263126")
 PORT = int(os.getenv("PORT", 8081))
 
@@ -100,18 +104,26 @@ async def handle_chat(request):
             history = history[-20:]
             CHAT_HISTORY[session_id] = history
 
-        messages = [{"role": "system", "content": CHATBOT_SYSTEM_PROMPT}] + history
-
         async with httpx.AsyncClient(timeout=30) as http:
             resp = await http.post(
-                "https://api.openai.com/v1/chat/completions",
-                headers={"Authorization": f"Bearer {OPENAI_API_KEY}", "Content-Type": "application/json"},
-                json={"model": "gpt-4o-mini", "messages": messages, "max_tokens": 300, "temperature": 0.7})
+                "https://api.anthropic.com/v1/messages",
+                headers={
+                    "x-api-key": ANTHROPIC_API_KEY,
+                    "anthropic-version": "2023-06-01",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "model": "claude-haiku-4-5-20251001",
+                    "max_tokens": 300,
+                    "system": CHATBOT_SYSTEM_PROMPT,
+                    "messages": history,
+                })
 
         if resp.status_code != 200:
+            print(f"Chat API Fehler: {resp.status_code} {resp.text[:300]}")
             return web.json_response({"error": "KI antwortet nicht"}, status=500)
 
-        reply = resp.json()["choices"][0]["message"]["content"]
+        reply = resp.json()["content"][0]["text"]
         history.append({"role": "assistant", "content": reply})
         return web.json_response({"ok": True, "reply": reply})
 
