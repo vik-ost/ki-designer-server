@@ -13,7 +13,7 @@ load_dotenv(os.path.join(os.path.dirname(__file__), "..", ".env"))
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
 MESHY_API_KEY = os.getenv("MESHY_API_KEY", "")
-KI_TELEGRAM_TOKEN = os.getenv("KI_TELEGRAM_TOKEN", "8687941693:AAF204T_j8o_g6CA797uYBU9W2T8nXAo7ck")
+KI_TELEGRAM_TOKEN = os.getenv("KI_TELEGRAM_TOKEN") or "8687941693:AAF204T_j8o_g6CA797uYBU9W2T8nXAo7ck"
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "1668263126")
 PORT = int(os.getenv("PORT", 8081))
 
