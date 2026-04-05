@@ -397,23 +397,11 @@ async def cors_middleware(request, handler):
     return response
 
 
-# === TELEGRAM DEBUG (temporaer) ===
-
-async def handle_telegram_debug(request):
-    try:
-        async with httpx.AsyncClient(timeout=10) as http:
-            resp = await http.get(f"https://api.telegram.org/bot{KI_TELEGRAM_TOKEN}/getUpdates")
-        return web.json_response(resp.json())
-    except Exception as e:
-        return web.json_response({"error": str(e)}, status=500)
-
-
 # === APP START ===
 
 def main():
     app = web.Application(middlewares=[cors_middleware])
     app.router.add_get("/health", handle_health)
-    app.router.add_get("/api/telegram-debug", handle_telegram_debug)
     app.router.add_post("/api/chat", handle_chat)
     app.router.add_post("/api/etsy-tags", handle_etsy_tags)
     app.router.add_post("/api/generate", handle_generate)
