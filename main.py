@@ -10,9 +10,9 @@ from dotenv import load_dotenv
 load_dotenv(os.path.join(os.path.dirname(__file__), "..", ".env"))
 
 # Alle API Keys aus Environment Variables (sicher!)
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
-ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
-MESHY_API_KEY = os.getenv("MESHY_API_KEY", "")
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "").strip()
+ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "").strip()
+MESHY_API_KEY = os.getenv("MESHY_API_KEY", "").strip()
 KI_TELEGRAM_TOKEN = "8687941693:AAF204T_j8o_g6CA797uYBU9W2T8nXAo7ck"
 TELEGRAM_CHAT_ID = "1668263126"
 PORT = int(os.getenv("PORT", 8081))
