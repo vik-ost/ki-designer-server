@@ -13,6 +13,7 @@ load_dotenv(os.path.join(os.path.dirname(__file__), "..", ".env"))
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "").strip()
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "").strip()
 MESHY_API_KEY = os.getenv("MESHY_API_KEY", "").strip()
+FAL_API_KEY = os.getenv("FAL_API_KEY", "").strip()
 KI_TELEGRAM_TOKEN = "8687941693:AAF204T_j8o_g6CA797uYBU9W2T8nXAo7ck"
 TELEGRAM_CHAT_ID = "1668263126"
 PORT = int(os.getenv("PORT", 8081))
@@ -377,6 +378,194 @@ async def handle_order(request):
         return web.json_response({"error": str(e)}, status=500)
 
 
+# === MINI-ME: FOTO → CARTOON (fal.ai InstantID) ===
+
+async def handle_minime_cartoon(request):
+    try:
+        reader = await request.multipart()
+        field = await reader.next()
+        if not field or field.name != "photo":
+            return web.json_response({"error": "Foto fehlt"}, status=400)
+
+        photo_data = await field.read()
+        content_type = field.content_type or "image/jpeg"
+
+        if len(photo_data) > 10 * 1024 * 1024:
+            return web.json_response({"error": "Foto zu gross (max 10 MB)"}, status=400)
+
+        # Foto zu fal.ai Storage hochladen
+        async with httpx.AsyncClient(timeout=30) as http:
+            upload_resp = await http.post(
+                "https://fal.run/files/upload",
+                headers={"Authorization": f"Key {FAL_API_KEY}", "Content-Type": content_type},
+                content=photo_data,
+            )
+
+        if upload_resp.status_code != 200:
+            print(f"fal.ai Upload Fehler: {upload_resp.status_code} {upload_resp.text[:200]}")
+            return web.json_response({"error": "Foto-Upload fehlgeschlagen"}, status=500)
+
+        face_image_url = upload_resp.json().get("url", "")
+        print(f"Mini-Me Foto hochgeladen: {face_image_url[:60]}...")
+
+        # InstantID: Gesicht → Funko-Pop-Cartoon
+        async with httpx.AsyncClient(timeout=120) as http:
+            resp = await http.post(
+                "https://fal.run/fal-ai/instant-id",
+                headers={"Authorization": f"Key {FAL_API_KEY}", "Content-Type": "application/json"},
+                json={
+                    "face_image_url": face_image_url,
+                    "prompt": (
+                        "funko pop vinyl toy figure, chibi cartoon character, big round eyes, "
+                        "oversized head, simplified cute facial features, smooth colorful plastic, "
+                        "3D render, white background, product photo"
+                    ),
+                    "negative_prompt": "ugly, deformed, realistic photograph, blurry, extra limbs",
+                    "image_size": "square_hd",
+                    "num_inference_steps": 30,
+                    "guidance_scale": 5.0,
+                    "ip_adapter_scale": 0.8,
+                    "controlnet_conditioning_scale": 0.8,
+                },
+            )
+
+        if resp.status_code != 200:
+            print(f"fal.ai InstantID Fehler: {resp.status_code} {resp.text[:200]}")
+            return web.json_response({"error": "Cartoon-Generierung fehlgeschlagen"}, status=500)
+
+        cartoon_url = resp.json()["images"][0]["url"]
+        print(f"Mini-Me Cartoon fertig: {cartoon_url[:60]}...")
+        return web.json_response({"ok": True, "cartoon_url": cartoon_url})
+
+    except Exception as e:
+        print(f"Mini-Me Cartoon Fehler: {e}")
+        return web.json_response({"error": str(e)}, status=500)
+
+
+# === MINI-ME: CARTOON → 3D (Meshy image-to-3d) ===
+
+async def handle_minime_generate3d(request):
+    try:
+        data = await request.json()
+        image_url = data.get("image_url", "")
+        if not image_url:
+            return web.json_response({"error": "Bild-URL fehlt"}, status=400)
+
+        print(f"Mini-Me 3D gestartet: {image_url[:60]}...")
+        async with httpx.AsyncClient(timeout=30) as http:
+            resp = await http.post(
+                "https://api.meshy.ai/openapi/v1/image-to-3d",
+                headers={"Authorization": f"Bearer {MESHY_API_KEY}", "Content-Type": "application/json"},
+                json={"image_url": image_url, "ai_model": "meshy-4", "topology": "quad",
+                      "target_polycount": 30000, "should_remesh": True},
+            )
+
+        if resp.status_code not in (200, 202):
+            print(f"Meshy image-to-3d Fehler: {resp.status_code} {resp.text[:200]}")
+            return web.json_response({"error": "3D-Generierung fehlgeschlagen"}, status=500)
+
+        task_id = resp.json().get("result", "")
+        print(f"Mini-Me 3D Task: {task_id}")
+        return web.json_response({"ok": True, "task_id": task_id})
+
+    except Exception as e:
+        print(f"Mini-Me 3D Fehler: {e}")
+        return web.json_response({"error": str(e)}, status=500)
+
+
+async def handle_minime_3d_status(request):
+    try:
+        task_id = request.match_info["task_id"]
+        async with httpx.AsyncClient(timeout=15) as http:
+            resp = await http.get(
+                f"https://api.meshy.ai/openapi/v1/image-to-3d/{task_id}",
+                headers={"Authorization": f"Bearer {MESHY_API_KEY}"},
+            )
+
+        if resp.status_code != 200:
+            return web.json_response({"error": "Status-Abfrage fehlgeschlagen"}, status=500)
+
+        data = resp.json()
+        return web.json_response({
+            "status": data.get("status", "UNKNOWN"),
+            "progress": data.get("progress", 0),
+            "model_url": data.get("model_urls", {}).get("glb", ""),
+            "stl_url": data.get("model_urls", {}).get("stl", ""),
+            "thumbnail": data.get("thumbnail_url", ""),
+        })
+
+    except Exception as e:
+        return web.json_response({"error": str(e)}, status=500)
+
+
+# === MINI-ME BESTELLUNG ===
+
+async def handle_minime_order(request):
+    try:
+        data = await request.json()
+        orders = []
+        if os.path.exists(KI_ORDERS_FILE):
+            with open(KI_ORDERS_FILE, "r") as f:
+                orders = json.load(f)
+
+        order = {
+            "id": len(orders) + 1,
+            "type": "mini-me",
+            "date": datetime.now(CET).isoformat(),
+            "name": data.get("name", ""),
+            "email": data.get("email", ""),
+            "size": data.get("size", ""),
+            "cartoon_url": data.get("cartoon_url", ""),
+            "model_url": data.get("model_url", ""),
+            "stl_url": data.get("stl_url", ""),
+            "notes": data.get("notes", ""),
+            "status": "neu",
+        }
+        orders.append(order)
+        with open(KI_ORDERS_FILE, "w") as f:
+            json.dump(orders, f, indent=2, ensure_ascii=False)
+
+        msg = (
+            f"<b>Neue Mini-Me Bestellung!</b>\n"
+            f"Kunde: {order['name']}\nEmail: {order['email']}\n"
+            f"Groesse: {order['size']}\nNotizen: {order['notes']}\n"
+            f"Bestellung #{order['id']}\n\n"
+        )
+        if order["stl_url"]:
+            msg += f"<b>STL (drucken):</b> {order['stl_url']}\n"
+        if order["model_url"]:
+            msg += f"GLB (Vorschau): {order['model_url']}\n"
+        if order["cartoon_url"]:
+            msg += f"Cartoon: {order['cartoon_url']}\n"
+
+        await send_ki_telegram(msg)
+
+        # STL-Datei per Telegram schicken
+        if order["stl_url"]:
+            try:
+                async with httpx.AsyncClient(timeout=30) as dl_http:
+                    stl_resp = await dl_http.get(order["stl_url"])
+                    if stl_resp.status_code == 200:
+                        import tempfile
+                        stl_path = os.path.join(tempfile.gettempdir(), f"minime_{order['id']}.stl")
+                        with open(stl_path, "wb") as sf:
+                            sf.write(stl_resp.content)
+                        tg_url = f"https://api.telegram.org/bot{KI_TELEGRAM_TOKEN}/sendDocument"
+                        with open(stl_path, "rb") as sf:
+                            async with httpx.AsyncClient(timeout=30) as tg_http:
+                                await tg_http.post(tg_url,
+                                    files={"document": (f"minime_{order['id']}.stl", sf)},
+                                    data={"chat_id": TELEGRAM_CHAT_ID,
+                                          "caption": f"Mini-Me STL #{order['id']} – {order['name']}, {order['size']}"})
+            except Exception as e:
+                print(f"STL Send Fehler: {e}")
+
+        return web.json_response({"ok": True, "order_id": order["id"]})
+
+    except Exception as e:
+        return web.json_response({"error": str(e)}, status=500)
+
+
 # === HEALTH CHECK ===
 
 async def handle_health(request):
@@ -408,6 +597,11 @@ def main():
     app.router.add_post("/api/generate3d", handle_generate_3d)
     app.router.add_get("/api/3d-status/{task_id}", handle_3d_status)
     app.router.add_post("/api/order", handle_order)
+    # Mini-Me
+    app.router.add_post("/api/minime/cartoon", handle_minime_cartoon)
+    app.router.add_post("/api/minime/generate3d", handle_minime_generate3d)
+    app.router.add_get("/api/minime/3d-status/{task_id}", handle_minime_3d_status)
+    app.router.add_post("/api/minime/order", handle_minime_order)
 
     print(f"KI-Designer API laeuft auf Port {PORT}")
     web.run_app(app, host="0.0.0.0", port=PORT)
