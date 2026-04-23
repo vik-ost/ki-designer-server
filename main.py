@@ -389,7 +389,7 @@ async def handle_minime_cartoon(request):
             return web.json_response({"error": "Foto fehlt"}, status=400)
 
         photo_data = await field.read()
-        content_type = field.content_type or "image/jpeg"
+        content_type = field.headers.get("Content-Type", "image/jpeg")
 
         if len(photo_data) > 30 * 1024 * 1024:
             return web.json_response({"error": "Foto zu gross (max 30 MB)"}, status=400)
