@@ -427,7 +427,16 @@ async def handle_minime_cartoon(request):
                 return web.json_response({"error": "Kein Gesicht erkannt. Bitte ein klares Frontfoto ohne Sonnenbrille hochladen."}, status=422)
             return web.json_response({"error": "Cartoon-Generierung fehlgeschlagen"}, status=500)
 
-        cartoon_url = resp.json()["images"][0]["url"]
+        result = resp.json()
+        print(f"fal.ai Antwort Keys: {list(result.keys())}")
+        # fal.ai gibt images oder image zurück je nach Modell
+        if "images" in result:
+            cartoon_url = result["images"][0]["url"]
+        elif "image" in result:
+            cartoon_url = result["image"]["url"]
+        else:
+            print(f"fal.ai unbekannte Antwort: {str(result)[:300]}")
+            return web.json_response({"error": "Cartoon-Generierung fehlgeschlagen"}, status=500)
         print(f"Mini-Me Cartoon fertig: {cartoon_url[:60]}...")
         return web.json_response({"ok": True, "cartoon_url": cartoon_url})
 
