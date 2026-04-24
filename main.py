@@ -421,8 +421,9 @@ async def handle_minime_cartoon(request):
             )
 
         if resp.status_code != 200:
-            print(f"fal.ai InstantID Fehler: {resp.status_code} {resp.text[:300]}")
-            return web.json_response({"error": "Cartoon-Generierung fehlgeschlagen"}, status=500)
+            detail = resp.text[:300]
+            print(f"fal.ai InstantID Fehler: {resp.status_code} {detail}")
+            return web.json_response({"error": f"fal.ai {resp.status_code}: {detail}"}, status=500)
 
         cartoon_url = resp.json()["images"][0]["url"]
         print(f"Mini-Me Cartoon fertig: {cartoon_url[:60]}...")
