@@ -378,11 +378,10 @@ async def handle_order(request):
         return web.json_response({"error": str(e)}, status=500)
 
 
-# === MINI-ME: FOTO → CARTOON (fal.ai InstantID) ===
+# === MINI-ME: FOTO → 3D direkt (fal.ai Storage Upload + Meshy image-to-3d) ===
 
 async def handle_minime_cartoon(request):
     try:
-        import base64
         reader = await request.multipart()
         field = await reader.next()
         if not field or field.name != "photo":
@@ -394,67 +393,27 @@ async def handle_minime_cartoon(request):
         if len(photo_data) > 30 * 1024 * 1024:
             return web.json_response({"error": "Foto zu gross (max 30 MB)"}, status=400)
 
-        # Bild als Base64 Data-URI direkt übergeben (kein separater Upload nötig)
-        b64 = base64.b64encode(photo_data).decode("utf-8")
-        face_image_url = f"data:{content_type};base64,{b64}"
-        print(f"Mini-Me Foto als Base64 kodiert ({len(photo_data)//1024} KB)")
+        print(f"Mini-Me Foto empfangen ({len(photo_data)//1024} KB), lade zu fal.ai hoch...")
 
-        # InstantID: Gesicht → Funko-Pop-Cartoon
-        async with httpx.AsyncClient(timeout=120) as http:
-            resp = await http.post(
-                "https://fal.run/fal-ai/instantid",
-                headers={"Authorization": f"Key {FAL_API_KEY}", "Content-Type": "application/json"},
-                json={
-                    "face_image_url": face_image_url,
-                    "prompt": (
-                        "funko pop vinyl toy figure, chibi cartoon character, big round eyes, "
-                        "oversized head, simplified cute facial features, smooth colorful plastic, "
-                        "3D render, white background, product photo"
-                    ),
-                    "negative_prompt": "ugly, deformed, realistic photograph, blurry, extra limbs",
-                    "image_size": "square_hd",
-                    "num_inference_steps": 30,
-                    "guidance_scale": 5.0,
-                    "ip_adapter_scale": 0.8,
-                    "controlnet_conditioning_scale": 0.8,
-                },
+        # 1. Foto zu fal.ai Storage hochladen → öffentliche URL für Meshy
+        ext = "jpg" if "jpeg" in content_type else content_type.split("/")[-1]
+        async with httpx.AsyncClient(timeout=60) as http:
+            upload_resp = await http.post(
+                "https://rest.alpha.fal.ai/storage/upload",
+                headers={"Authorization": f"Key {FAL_API_KEY}"},
+                files={"file": (f"photo.{ext}", photo_data, content_type)},
             )
 
-        if resp.status_code != 200:
-            detail = resp.text[:500]
-            print(f"fal.ai InstantID Fehler: {resp.status_code} {detail}")
-            if "face" in detail.lower():
-                return web.json_response({"error": "Kein Gesicht erkannt. Bitte ein klares Frontfoto ohne Sonnenbrille hochladen."}, status=422)
-            return web.json_response({"error": "Cartoon-Generierung fehlgeschlagen"}, status=500)
+        if upload_resp.status_code != 200:
+            print(f"fal.ai Upload Fehler: {upload_resp.status_code} {upload_resp.text[:200]}")
+            return web.json_response({"error": "Foto-Upload fehlgeschlagen"}, status=500)
 
-        result = resp.json()
-        print(f"fal.ai Antwort Keys: {list(result.keys())}")
-        # fal.ai gibt images oder image zurück je nach Modell
-        if "images" in result:
-            cartoon_url = result["images"][0]["url"]
-        elif "image" in result:
-            cartoon_url = result["image"]["url"]
-        else:
-            print(f"fal.ai unbekannte Antwort: {str(result)[:300]}")
-            return web.json_response({"error": "Cartoon-Generierung fehlgeschlagen"}, status=500)
-        print(f"Mini-Me Cartoon fertig: {cartoon_url[:60]}...")
-        return web.json_response({"ok": True, "cartoon_url": cartoon_url})
-
-    except Exception as e:
-        print(f"Mini-Me Cartoon Fehler: {e}")
-        return web.json_response({"error": str(e)}, status=500)
-
-
-# === MINI-ME: CARTOON → 3D (Meshy image-to-3d) ===
-
-async def handle_minime_generate3d(request):
-    try:
-        data = await request.json()
-        image_url = data.get("image_url", "")
+        image_url = upload_resp.json().get("url", "")
         if not image_url:
-            return web.json_response({"error": "Bild-URL fehlt"}, status=400)
+            return web.json_response({"error": "Foto-Upload fehlgeschlagen"}, status=500)
+        print(f"Foto hochgeladen: {image_url[:60]}...")
 
-        print(f"Mini-Me 3D gestartet: {image_url[:60]}...")
+        # 2. Meshy image-to-3d starten
         async with httpx.AsyncClient(timeout=30) as http:
             resp = await http.post(
                 "https://api.meshy.ai/openapi/v1/image-to-3d",
@@ -468,11 +427,11 @@ async def handle_minime_generate3d(request):
             return web.json_response({"error": "3D-Generierung fehlgeschlagen"}, status=500)
 
         task_id = resp.json().get("result", "")
-        print(f"Mini-Me 3D Task: {task_id}")
+        print(f"Mini-Me 3D Task gestartet: {task_id}")
         return web.json_response({"ok": True, "task_id": task_id})
 
     except Exception as e:
-        print(f"Mini-Me 3D Fehler: {e}")
+        print(f"Mini-Me Fehler: {e}")
         return web.json_response({"error": str(e)}, status=500)
 
 
@@ -602,7 +561,6 @@ def main():
     app.router.add_post("/api/order", handle_order)
     # Mini-Me
     app.router.add_post("/api/minime/cartoon", handle_minime_cartoon)
-    app.router.add_post("/api/minime/generate3d", handle_minime_generate3d)
     app.router.add_get("/api/minime/3d-status/{task_id}", handle_minime_3d_status)
     app.router.add_post("/api/minime/order", handle_minime_order)
 
