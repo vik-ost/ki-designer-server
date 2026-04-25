@@ -395,22 +395,37 @@ async def handle_minime_cartoon(request):
 
         print(f"Mini-Me Foto empfangen ({len(photo_data)//1024} KB), lade zu fal.ai hoch...")
 
-        # 1. Foto zu fal.ai Storage hochladen → öffentliche URL für Meshy
+        # 1a. fal.ai Storage: Upload-URL anfordern
         ext = "jpg" if "jpeg" in content_type else content_type.split("/")[-1]
-        async with httpx.AsyncClient(timeout=60) as http:
-            upload_resp = await http.post(
-                "https://rest.alpha.fal.ai/storage/upload",
-                headers={"Authorization": f"Key {FAL_API_KEY}"},
-                files={"file": (f"photo.{ext}", photo_data, content_type)},
+        async with httpx.AsyncClient(timeout=30) as http:
+            init_resp = await http.post(
+                "https://rest.alpha.fal.ai/storage/upload/initiate",
+                headers={"Authorization": f"Key {FAL_API_KEY}", "Content-Type": "application/json"},
+                json={"content_type": content_type, "file_name": f"photo.{ext}"},
             )
 
-        if upload_resp.status_code != 200:
-            print(f"fal.ai Upload Fehler: {upload_resp.status_code} {upload_resp.text[:200]}")
+        if init_resp.status_code != 200:
+            print(f"fal.ai Initiate Fehler: {init_resp.status_code} {init_resp.text[:200]}")
             return web.json_response({"error": "Foto-Upload fehlgeschlagen"}, status=500)
 
-        image_url = upload_resp.json().get("url", "")
-        if not image_url:
+        init_data = init_resp.json()
+        upload_url = init_data.get("upload_url", "")
+        image_url = init_data.get("file_url", "")
+        if not upload_url or not image_url:
             return web.json_response({"error": "Foto-Upload fehlgeschlagen"}, status=500)
+
+        # 1b. Foto per PUT hochladen
+        async with httpx.AsyncClient(timeout=60) as http:
+            put_resp = await http.put(
+                upload_url,
+                content=photo_data,
+                headers={"Content-Type": content_type},
+            )
+
+        if put_resp.status_code not in (200, 204):
+            print(f"fal.ai PUT Fehler: {put_resp.status_code}")
+            return web.json_response({"error": "Foto-Upload fehlgeschlagen"}, status=500)
+
         print(f"Foto hochgeladen: {image_url[:60]}...")
 
         # 2. Meshy image-to-3d starten
