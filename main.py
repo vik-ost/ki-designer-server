@@ -414,20 +414,24 @@ async def handle_minime_cartoon(request):
         image_url = f"{RENDER_EXTERNAL_URL}/api/minime/image/{img_filename}"
         print(f"Mini-Me Foto gespeichert ({len(photo_data)//1024} KB): {image_url}")
 
-        async with httpx.AsyncClient(timeout=30) as http:
-            resp = await http.post(
+        import aiohttp as _aiohttp
+        timeout = _aiohttp.ClientTimeout(total=30)
+        async with _aiohttp.ClientSession(timeout=timeout) as session:
+            async with session.post(
                 "https://api.meshy.ai/openapi/v1/image-to-3d",
-                headers={"Authorization": f"Bearer {MESHY_API_KEY}", "Content-Type": "application/json"},
+                headers={"Authorization": f"Bearer {MESHY_API_KEY}"},
                 json={"image_url": image_url, "ai_model": "meshy-4", "topology": "quad",
                       "target_polycount": 30000, "should_remesh": True},
-            )
+            ) as resp:
+                resp_status = resp.status
+                resp_json = await resp.json(content_type=None)
 
-        if resp.status_code not in (200, 202):
-            print(f"Meshy image-to-3d Fehler: {resp.status_code} {resp.text[:200]}")
+        if resp_status not in (200, 202):
+            print(f"Meshy image-to-3d Fehler: {resp_status} {resp_json}")
             asyncio.create_task(_delayed_delete(img_path, delay=0))
             return web.json_response({"error": "3D-Generierung fehlgeschlagen"}, status=500)
 
-        task_id = resp.json().get("result", "")
+        task_id = resp_json.get("result", "")
         print(f"Mini-Me 3D Task gestartet: {task_id}")
         asyncio.create_task(_delayed_delete(img_path, delay=120))
         return web.json_response({"ok": True, "task_id": task_id})
@@ -450,16 +454,17 @@ async def handle_minime_image(request):
 async def handle_minime_3d_status(request):
     try:
         task_id = request.match_info["task_id"]
-        async with httpx.AsyncClient(timeout=15) as http:
-            resp = await http.get(
+        import aiohttp as _aiohttp
+        timeout = _aiohttp.ClientTimeout(total=15)
+        async with _aiohttp.ClientSession(timeout=timeout) as session:
+            async with session.get(
                 f"https://api.meshy.ai/openapi/v1/image-to-3d/{task_id}",
                 headers={"Authorization": f"Bearer {MESHY_API_KEY}"},
-            )
+            ) as resp:
+                if resp.status != 200:
+                    return web.json_response({"error": "Status-Abfrage fehlgeschlagen"}, status=500)
+                data = await resp.json(content_type=None)
 
-        if resp.status_code != 200:
-            return web.json_response({"error": "Status-Abfrage fehlgeschlagen"}, status=500)
-
-        data = resp.json()
         return web.json_response({
             "status": data.get("status", "UNKNOWN"),
             "progress": data.get("progress", 0),
