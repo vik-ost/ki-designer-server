@@ -420,7 +420,7 @@ async def handle_minime_cartoon(request):
             async with session.post(
                 "https://api.meshy.ai/openapi/v1/image-to-3d",
                 headers={"Authorization": f"Bearer {MESHY_API_KEY}"},
-                json={"image_url": image_url, "ai_model": "meshy-4", "topology": "quad",
+                json={"image_url": image_url, "ai_model": "meshy-6", "topology": "quad",
                       "target_polycount": 30000, "should_remesh": True},
             ) as resp:
                 resp_status = resp.status
