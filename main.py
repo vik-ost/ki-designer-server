@@ -2,6 +2,7 @@ import asyncio
 import json
 import os
 import re
+import uuid
 from aiohttp import web
 import httpx
 from datetime import datetime, timezone, timedelta
@@ -14,6 +15,7 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "").strip()
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "").strip()
 MESHY_API_KEY = os.getenv("MESHY_API_KEY", "").strip()
 FAL_API_KEY = os.getenv("FAL_API_KEY", "").strip()
+RENDER_EXTERNAL_URL = os.getenv("RENDER_EXTERNAL_URL", "http://localhost:8081").rstrip("/")
 KI_TELEGRAM_TOKEN = "8687941693:AAF204T_j8o_g6CA797uYBU9W2T8nXAo7ck"
 TELEGRAM_CHAT_ID = "1668263126"
 PORT = int(os.getenv("PORT", 8081))
@@ -380,6 +382,14 @@ async def handle_order(request):
 
 # === MINI-ME: FOTO → 3D direkt (fal.ai Storage Upload + Meshy image-to-3d) ===
 
+async def _delayed_delete(path: str, delay: int = 120):
+    await asyncio.sleep(delay)
+    try:
+        os.unlink(path)
+    except Exception:
+        pass
+
+
 async def handle_minime_cartoon(request):
     try:
         reader = await request.multipart()
@@ -393,42 +403,17 @@ async def handle_minime_cartoon(request):
         if len(photo_data) > 30 * 1024 * 1024:
             return web.json_response({"error": "Foto zu gross (max 30 MB)"}, status=400)
 
-        print(f"Mini-Me Foto empfangen ({len(photo_data)//1024} KB), lade zu fal.ai hoch...")
-
-        # 1a. fal.ai Storage: Upload-URL anfordern
         ext = "jpg" if "jpeg" in content_type else content_type.split("/")[-1]
-        async with httpx.AsyncClient(timeout=30) as http:
-            init_resp = await http.post(
-                "https://rest.alpha.fal.ai/storage/upload/initiate",
-                headers={"Authorization": f"Key {FAL_API_KEY}", "Content-Type": "application/json"},
-                json={"content_type": content_type, "file_name": f"photo.{ext}"},
-            )
+        img_id = str(uuid.uuid4())
+        img_filename = f"minime_{img_id}.{ext}"
+        img_path = f"/tmp/{img_filename}"
 
-        if init_resp.status_code != 200:
-            print(f"fal.ai Initiate Fehler: {init_resp.status_code} {init_resp.text[:200]}")
-            return web.json_response({"error": "Foto-Upload fehlgeschlagen"}, status=500)
+        with open(img_path, "wb") as f:
+            f.write(photo_data)
 
-        init_data = init_resp.json()
-        upload_url = init_data.get("upload_url", "")
-        image_url = init_data.get("file_url", "")
-        if not upload_url or not image_url:
-            return web.json_response({"error": "Foto-Upload fehlgeschlagen"}, status=500)
+        image_url = f"{RENDER_EXTERNAL_URL}/api/minime/image/{img_filename}"
+        print(f"Mini-Me Foto gespeichert ({len(photo_data)//1024} KB): {image_url}")
 
-        # 1b. Foto per PUT hochladen
-        async with httpx.AsyncClient(timeout=60) as http:
-            put_resp = await http.put(
-                upload_url,
-                content=photo_data,
-                headers={"Content-Type": content_type},
-            )
-
-        if put_resp.status_code not in (200, 204):
-            print(f"fal.ai PUT Fehler: {put_resp.status_code}")
-            return web.json_response({"error": "Foto-Upload fehlgeschlagen"}, status=500)
-
-        print(f"Foto hochgeladen: {image_url[:60]}...")
-
-        # 2. Meshy image-to-3d starten
         async with httpx.AsyncClient(timeout=30) as http:
             resp = await http.post(
                 "https://api.meshy.ai/openapi/v1/image-to-3d",
@@ -439,15 +424,27 @@ async def handle_minime_cartoon(request):
 
         if resp.status_code not in (200, 202):
             print(f"Meshy image-to-3d Fehler: {resp.status_code} {resp.text[:200]}")
+            asyncio.create_task(_delayed_delete(img_path, delay=0))
             return web.json_response({"error": "3D-Generierung fehlgeschlagen"}, status=500)
 
         task_id = resp.json().get("result", "")
         print(f"Mini-Me 3D Task gestartet: {task_id}")
+        asyncio.create_task(_delayed_delete(img_path, delay=120))
         return web.json_response({"ok": True, "task_id": task_id})
 
     except Exception as e:
         print(f"Mini-Me Fehler: {e}")
         return web.json_response({"error": str(e)}, status=500)
+
+
+async def handle_minime_image(request):
+    filename = request.match_info["filename"]
+    if "/" in filename or ".." in filename or not filename.startswith("minime_"):
+        raise web.HTTPForbidden()
+    path = f"/tmp/{filename}"
+    if not os.path.exists(path):
+        raise web.HTTPNotFound()
+    return web.FileResponse(path)
 
 
 async def handle_minime_3d_status(request):
@@ -576,6 +573,7 @@ def main():
     app.router.add_post("/api/order", handle_order)
     # Mini-Me
     app.router.add_post("/api/minime/cartoon", handle_minime_cartoon)
+    app.router.add_get("/api/minime/image/{filename}", handle_minime_image)
     app.router.add_get("/api/minime/3d-status/{task_id}", handle_minime_3d_status)
     app.router.add_post("/api/minime/order", handle_minime_order)
 
