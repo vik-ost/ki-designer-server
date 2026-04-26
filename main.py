@@ -382,6 +382,39 @@ async def handle_order(request):
 
 # === MINI-ME: FOTO → 3D direkt (fal.ai Storage Upload + Meshy image-to-3d) ===
 
+def crop_to_face(img_data: bytes) -> bytes:
+    """Gesicht erkennen und mit Polsterung ausschneiden. Fallback: Original."""
+    try:
+        import cv2
+        import numpy as np
+        nparr = np.frombuffer(img_data, np.uint8)
+        img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+        if img is None:
+            return img_data
+        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        cascade = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
+        faces = cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=4, minSize=(60, 60))
+        if len(faces) == 0:
+            print("Mini-Me: kein Gesicht erkannt, Original wird verwendet")
+            return img_data
+        x, y, w, h = max(faces, key=lambda f: f[2] * f[3])
+        # Kopf + Schultern: 80% Polsterung links/rechts, 60% oben, 120% unten
+        pad_x = int(w * 0.8)
+        pad_top = int(h * 0.6)
+        pad_bot = int(h * 1.2)
+        x1 = max(0, x - pad_x)
+        y1 = max(0, y - pad_top)
+        x2 = min(img.shape[1], x + w + pad_x)
+        y2 = min(img.shape[0], y + h + pad_bot)
+        cropped = img[y1:y2, x1:x2]
+        _, buf = cv2.imencode(".jpg", cropped, [cv2.IMWRITE_JPEG_QUALITY, 95])
+        print(f"Mini-Me: Gesicht erkannt bei ({x},{y},{w},{h}), Crop: {x1},{y1}→{x2},{y2}")
+        return buf.tobytes()
+    except Exception as e:
+        print(f"Mini-Me Face-Crop Fehler: {e}")
+        return img_data
+
+
 async def _delayed_delete(path: str, delay: int = 120):
     await asyncio.sleep(delay)
     try:
@@ -403,7 +436,10 @@ async def handle_minime_cartoon(request):
         if len(photo_data) > 30 * 1024 * 1024:
             return web.json_response({"error": "Foto zu gross (max 30 MB)"}, status=400)
 
-        ext = "jpg" if "jpeg" in content_type else content_type.split("/")[-1]
+        # Gesicht erkennen und ausschneiden
+        photo_data = crop_to_face(photo_data)
+        content_type = "image/jpeg"
+        ext = "jpg"
         img_id = str(uuid.uuid4())
         img_filename = f"minime_{img_id}.{ext}"
         img_path = f"/tmp/{img_filename}"
